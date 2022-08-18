@@ -24,6 +24,7 @@ import (
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/ddl"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/infoschema"
@@ -45,6 +46,7 @@ import (
 	"github.com/pingcap/tidb/util/execdetails"
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/memory"
+	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"go.uber.org/zap"
 )
@@ -226,6 +228,8 @@ func (e *InsertValues) processSetList() error {
 
 // insertRows processes `insert|replace into values ()` or `insert|replace into set x=y`
 func insertRows(ctx context.Context, base insertCommon) (err error) {
+	tikv.EnableFailpoints()
+	failpoint.Enable(`tikvclient/beforeCommit`, "fail")
 	e := base.insertCommon()
 	// For `insert|replace into set x=y`, process the set list here.
 	if err = e.processSetList(); err != nil {
