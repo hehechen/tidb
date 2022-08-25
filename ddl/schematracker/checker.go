@@ -379,6 +379,12 @@ func (d Checker) UpdateTableReplicaInfo(ctx sessionctx.Context, physicalID int64
 	panic("implement me")
 }
 
+// UpdateTableReplicaReadyInfo implements the DDL interface, it's no-op in DM's case.
+func (d Checker) UpdateTableReplicaReadyInfo(ctx sessionctx.Context, readyInfo map[int64]bool) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 // RepairTable implements the DDL interface.
 func (d Checker) RepairTable(ctx sessionctx.Context, table *ast.TableName, createStmt *ast.CreateTableStmt) error {
 	//TODO implement me

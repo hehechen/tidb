@@ -2208,15 +2208,20 @@ func (e *memtableRetriever) dataForTableTiFlashReplica(ctx sessionctx.Context, s
 					progress = progressMap[tbl.ID]
 				}
 			}
+
+			available := tbl.TiFlashReplica.Available
+			if available {
+				available = tbl.TiFlashReplica.Ready
+			}
 			record := types.MakeDatums(
 				schema.Name.O,                   // TABLE_SCHEMA
 				tbl.Name.O,                      // TABLE_NAME
 				tbl.ID,                          // TABLE_ID
 				int64(tbl.TiFlashReplica.Count), // REPLICA_COUNT
 				strings.Join(tbl.TiFlashReplica.LocationLabels, ","), // LOCATION_LABELS
-				tbl.TiFlashReplica.Available,                         // AVAILABLE
-				progress,                                             // PROGRESS
-				tbl.TiFlashMode.String(),                             // TABLE_MPDE
+				available,                // AVAILABLE
+				progress,                 // PROGRESS
+				tbl.TiFlashMode.String(), // TABLE_MPDE
 			)
 			rows = append(rows, record)
 		}

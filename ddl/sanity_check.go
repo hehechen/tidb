@@ -193,7 +193,7 @@ func (d *ddl) checkHistoryJobInTest(ctx sessionctx.Context, historyJob *model.Jo
 
 	// Check DDL query.
 	switch historyJob.Type {
-	case model.ActionUpdateTiFlashReplicaStatus, model.ActionUnlockTable:
+	case model.ActionUpdateTiFlashReplicaStatus, model.ActionUnlockTable, model.ActionUpdateTiFlashReplicaReadyStatus:
 		if historyJob.Query != "" {
 			panic(fmt.Sprintf("job ID %d, type %s, query %s", historyJob.ID, historyJob.Type.String(), historyJob.Query))
 		}

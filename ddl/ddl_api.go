@@ -5197,6 +5197,57 @@ func (d *ddl) UpdateTableReplicaInfo(ctx sessionctx.Context, physicalID int64, a
 	return errors.Trace(err)
 }
 
+// UpdateTableReplicaReadyInfo updates the table flash replica ready infos.
+func (d *ddl) UpdateTableReplicaReadyInfo(ctx sessionctx.Context, readyInfo map[int64]bool) error {
+	is := d.infoCache.GetLatest()
+
+	schemaIDs := make([]int64, 0, len(readyInfo))
+	tableIDs := make([]int64, 0, len(readyInfo))
+
+	var ddlArg []TiFlashReplicaReadyDDLArgs
+
+	for physicalID, ready := range readyInfo {
+		tb, ok := is.TableByID(physicalID)
+		if !ok {
+			tb, _, _ = is.FindTableByPartitionID(physicalID)
+			if tb == nil {
+				return infoschema.ErrTableNotExists.GenWithStack("Table which ID = %d does not exist.", physicalID)
+			}
+		}
+
+		tbInfo := tb.Meta()
+		if tbInfo.TiFlashReplica == nil || (tbInfo.ID == physicalID && tbInfo.TiFlashReplica.Ready == ready) ||
+			(tbInfo.ID != physicalID && ready == tbInfo.TiFlashReplica.IsPartitionReady(physicalID)) {
+			continue
+		}
+
+		db, ok := is.SchemaByTable(tbInfo)
+		if !ok {
+			return infoschema.ErrDatabaseNotExists.GenWithStack("Database of table `%s` does not exist.", tb.Meta().Name)
+		}
+		ddlArg = append(ddlArg, TiFlashReplicaReadyDDLArgs{
+			SchemaID:   db.ID,
+			TableID:    tb.Meta().ID,
+			SchemaName: db.Name.L,
+			TableName:  tb.Meta().Name.L,
+			PhysicalID: physicalID,
+			Ready:      ready,
+		})
+		schemaIDs = append(schemaIDs, db.ID)
+		tableIDs = append(tableIDs, tb.Meta().ID)
+	}
+
+	job := &model.Job{
+		Type:       model.ActionUpdateTiFlashReplicaReadyStatus,
+		BinlogInfo: &model.HistoryInfo{},
+		Args:       []interface{}{ddlArg},
+		CtxVars:    []interface{}{schemaIDs, tableIDs},
+	}
+	err := d.DoDDLJob(ctx, job)
+	err = d.callHookOnChanged(job, err)
+	return errors.Trace(err)
+}
+
 // checkAlterTableCharset uses to check is it possible to change the charset of table.
 // This function returns 2 variable:
 // doNothing: if doNothing is true, means no need to change any more, because the target charset is same with the charset of table.

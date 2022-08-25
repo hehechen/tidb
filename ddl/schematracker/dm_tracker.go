@@ -1074,6 +1074,12 @@ func (d SchemaTracker) UpdateTableReplicaInfo(ctx sessionctx.Context, physicalID
 	return nil
 }
 
+// UpdateTableReplicaReadyInfo implements the DDL interface, it's no-op in DM's case.
+func (d SchemaTracker) UpdateTableReplicaReadyInfo(ctx sessionctx.Context, readyInfo map[int64]bool) error {
+	return nil
+
+}
+
 // RepairTable implements the DDL interface, it's no-op in DM's case.
 func (d SchemaTracker) RepairTable(ctx sessionctx.Context, table *ast.TableName, createStmt *ast.CreateTableStmt) error {
 	return nil
