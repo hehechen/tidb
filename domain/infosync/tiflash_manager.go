@@ -55,8 +55,8 @@ type TiFlashPlacementManager interface {
 	PostAccelerateSchedule(ctx context.Context, tableID int64) error
 	// GetPDRegionRecordStats is a helper function calling `/stats/region`.
 	GetPDRegionRecordStats(ctx context.Context, tableID int64, stats *helper.PDRegionStats) error
-	// GetPDInvalidRegionsInfo is a helper function calling `regions/check/down-peer|pending-peer`.
-	GetPDInvalidRegionsInfo(ctx context.Context, regionInfo *helper.RegionsInfo) error
+	// GetPDPendingPeerInfo is a helper function calling `regions/check/down-peer|pending-peer`.
+	GetPDPendingPeerInfo(ctx context.Context, regionInfo *helper.RegionsInfo) error
 	// GetStoresStat gets the TiKV store information by accessing PD's api.
 	GetStoresStat(ctx context.Context) (*helper.StoresStat, error)
 	// Close is to close TiFlashPlacementManager
@@ -227,26 +227,11 @@ func (m *TiFlashPDPlacementManager) GetPDRegionRecordStats(ctx context.Context, 
 	return nil
 }
 
-// GetPDInvalidRegionsInfo is a helper function calling `regions/check/down-peer|pending-peer`.
-func (m *TiFlashPDPlacementManager) GetPDInvalidRegionsInfo(ctx context.Context, regionInfo *helper.RegionsInfo) error {
-	var tempRegionInfo helper.RegionsInfo
+// GetPDPendingPeerInfo is a helper function calling `regions/check/pending-peer`.
+func (m *TiFlashPDPlacementManager) GetPDPendingPeerInfo(ctx context.Context, regionInfo *helper.RegionsInfo) error {
 
-	p := "/pd/api/v1/regions/check/down-peer"
+	p := "/pd/api/v1/regions/check/pending-peer"
 	res, err := doRequest(ctx, "GetTiFlashPeerStatus", m.etcdCli.Endpoints(), p, "GET", nil)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if res == nil {
-		return fmt.Errorf("TiFlashPDPlacementManager returns error in GetPDRegionRecordStats")
-	}
-
-	err = json.Unmarshal(res, &tempRegionInfo)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	p = "/pd/api/v1/regions/check/pending-peer"
-	res, err = doRequest(ctx, "GetTiFlashPeerStatus", m.etcdCli.Endpoints(), p, "GET", nil)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -259,7 +244,6 @@ func (m *TiFlashPDPlacementManager) GetPDInvalidRegionsInfo(ctx context.Context,
 		return errors.Trace(err)
 	}
 
-	regionInfo = (*regionInfo).Merge(&tempRegionInfo)
 	logutil.BgLogger().Info("Got down|pending", zap.Int64("region counts", regionInfo.Count))
 	return nil
 }
@@ -503,9 +487,9 @@ func (tiflash *MockTiFlash) HandleGetPDRegionRecordStats(_ int64) helper.PDRegio
 	}
 }
 
-// HandleGetPDInvalidRegionsInfo is mock function for GetPDInvalidRegionsInfo.
+// HandleGetPDPendingPeerInfo is mock function for GetPDPendingPeerInfo.
 // It currently always returns 1 region with 1 down-peer Region and 1 pending peer
-func (tiflash *MockTiFlash) HandleGetPDInvalidRegionsInfo() helper.RegionsInfo {
+func (tiflash *MockTiFlash) HandleGetPDPendingPeerInfo() helper.RegionsInfo {
 	return helper.RegionsInfo{
 		Count: 1,
 		Regions: []helper.RegionInfo{
@@ -528,16 +512,6 @@ func (tiflash *MockTiFlash) HandleGetPDInvalidRegionsInfo() helper.RegionsInfo {
 					ID:        50,
 					StoreID:   20,
 					IsLearner: false,
-				},
-				DownPeers: []helper.RegionPeerStat{
-					{
-						DownSec: 1000,
-						Peer: helper.RegionPeer{
-							ID:        1,
-							StoreID:   20,
-							IsLearner: false,
-						},
-					},
 				},
 				PendingPeers: []helper.RegionPeer{
 					{
@@ -748,13 +722,13 @@ func (m *mockTiFlashPlacementManager) GetPDRegionRecordStats(ctx context.Context
 	return nil
 }
 
-func (m *mockTiFlashPlacementManager) GetPDInvalidRegionsInfo(ctx context.Context, regionInfo *helper.RegionsInfo) error {
+func (m *mockTiFlashPlacementManager) GetPDPendingPeerInfo(ctx context.Context, regionInfo *helper.RegionsInfo) error {
 	m.Lock()
 	defer m.Unlock()
 	if m.tiflash == nil {
 		return nil
 	}
-	*regionInfo = m.tiflash.HandleGetPDInvalidRegionsInfo()
+	*regionInfo = m.tiflash.HandleGetPDPendingPeerInfo()
 	return nil
 }
 

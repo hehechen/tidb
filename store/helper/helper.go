@@ -547,6 +547,11 @@ type RegionsInfo struct {
 	Regions []RegionInfo `json:"regions"`
 }
 
+type MaxRegionApproxLag struct {
+	RegionID     uint64 `json:"regionID"`
+	MaxApproxLag uint64 `json:"maxApproxLag"`
+}
+
 // NewRegionsInfo returns RegionsInfo
 func NewRegionsInfo() *RegionsInfo {
 	return &RegionsInfo{
@@ -1133,7 +1138,14 @@ func GetTiFlashTableIDFromEndKey(endKey string) int64 {
 	e, _ := hex.DecodeString(endKey)
 	_, decodedEndKey, _ := codec.DecodeBytes(e, []byte{})
 	tableID := tablecodec.DecodeTableID(decodedEndKey)
-	tableID--
+	return tableID
+}
+
+// GetTiFlashTableIDFromEndKey computes tableID from pd rule's endKey.
+func GetTiFlashTableIDFromStartKey(startKey string) int64 {
+	e, _ := hex.DecodeString(startKey)
+	_, decodedEndKey, _ := codec.DecodeBytes(e, []byte{})
+	tableID := tablecodec.DecodeTableID(decodedEndKey)
 	return tableID
 }
 
