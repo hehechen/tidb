@@ -640,10 +640,12 @@ type TiFlashReplicaInfo struct {
 	LocationLabels []string
 	// `Ready` will affect the result returned by dataForTableTiFlashReplica.
 	// It will be updated if all of tiflash peers are pending|down peer.
-	Ready                 bool
-	ReadyPartitionIDs     []int64
-	Available             bool
-	AvailablePartitionIDs []int64
+	Ready                    bool
+	ReadyPartitionIDs        []int64
+	Available                bool
+	AvailablePartitionIDs    []int64
+	MaxApproxLag             uint64
+	MaxApproxLagPartitionIDs []uint64
 }
 
 // IsPartitionReady checks whether the partition table replica was ready.

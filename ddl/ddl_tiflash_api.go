@@ -23,7 +23,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -569,160 +568,108 @@ func (d *ddl) pollTiFlashPeerInfo(ctx sessionctx.Context, pollTiFlashContext *Ti
 		return false, errors.Trace(err)
 	}
 
-	readyInfo := make(map[int64]bool)
-
 	for tableID, tableInfo := range tableMap {
-		if !tableInfo.Available {
+		pendingRegionCount, exist := invalidTableIDs[tableID]
+		if !exist {
+			pendingRegionCount = 0
+		}
+		regionReplica := make(map[int64]int)
+		for _, store := range pollTiFlashContext.TiFlashStores {
+			err := helper.CollectTiFlashStatus(store.Store.StatusAddress, tableID, &regionReplica)
+			if err != nil {
+				logutil.BgLogger().Error("Fail to get region record from TiFlash.",
+					zap.Int64("tableID", tableInfo.ID),
+					zap.Bool("isPartition", tableInfo.IsPartition))
+				continue
+			}
+		}
+
+		logutil.BgLogger().Debug("CollectTiFlashStatus", zap.Any("regionReplica", regionReplica), zap.Int64("tableID", tableID))
+		flashRegionCount := len(regionReplica)
+
+		var stats helper.PDRegionStats
+		if err := infosync.GetTiFlashPDRegionRecordStats(context.Background(), tableID, &stats); err != nil {
+			logutil.BgLogger().Error("Fail to get region record from PD.",
+				zap.Int64("tableID", tableInfo.ID),
+				zap.Bool("isPartition", tableInfo.IsPartition))
 			continue
 		}
-		invalidRegionCounts, exist := invalidTableIDs[tableID]
 
-		if exist {
-			if tableInfo.Ready {
-				var stats helper.PDRegionStats
-				if err := infosync.GetTiFlashPDRegionRecordStats(context.Background(), tableID, &stats); err != nil {
-					logutil.BgLogger().Error("Fail to get region record from PD.",
-						zap.Int64("tableID", tableInfo.ID),
-						zap.Bool("isPartition", tableInfo.IsPartition))
-					continue
+		totalRegionCount := stats.Count * int(tableInfo.Count)
+		if totalRegionCount == 0 {
+			logutil.BgLogger().Error("updating TiFlash replica process failed, Current regionCount is 0",
+				zap.Int64("tableID", tableInfo.ID),
+				zap.Bool("isPartition", tableInfo.IsPartition))
+			continue
+		}
+		// TODO: region may pending before created on TiFlash
+		pendingRegionCount = pendingRegionCount / int(tableInfo.Count)
+		progress := float64(flashRegionCount-pendingRegionCount) / float64(totalRegionCount)
+		logutil.BgLogger().Info("update TiFlash replica process", zap.Int64("tableID", tableInfo.ID), zap.Int("flashRegionCount", flashRegionCount), zap.Int("pendingRegionCount", pendingRegionCount), zap.Int("regionCount", totalRegionCount))
+		err := infosync.UpdateTiFlashTableSyncProgress(context.Background(), tableID, progress)
+		if err != nil {
+			logutil.BgLogger().Error("updating TiFlash replica process failed",
+				zap.Error(err),
+				zap.Int64("tableID", tableInfo.ID),
+				zap.Bool("isPartition", tableInfo.IsPartition),
+				zap.Int("invalidRegionCounts", pendingRegionCount),
+				zap.Int("regionCount", totalRegionCount),
+			)
+			continue
+		}
+
+		if !tableInfo.Available && progress == 1 {
+			// Will call `onUpdateFlashReplicaStatus` to update `TiFlashReplica`.
+			if err := d.UpdateTableReplicaInfo(ctx, tableID, true); err != nil {
+				if infoschema.ErrTableNotExists.Equal(err) && tableInfo.IsPartition {
+					// May be due to blocking add partition
+					logutil.BgLogger().Info("updating TiFlash replica status err, maybe false alarm by blocking add", zap.Error(err), zap.Int64("tableID", tableID), zap.Bool("isPartition", tableInfo.IsPartition))
+				} else {
+					logutil.BgLogger().Error("updating TiFlash replica status err", zap.Error(err), zap.Int64("tableID", tableID), zap.Bool("isPartition", tableInfo.IsPartition))
 				}
-
-				regionCount := stats.Count
-				if regionCount == 0 {
-					logutil.BgLogger().Error("updating TiFlash replica process failed, Current regionCount is 0",
-						zap.Int64("tableID", tableInfo.ID),
-						zap.Bool("isPartition", tableInfo.IsPartition))
-					continue
-				}
-
-				invalidRegionCounts = invalidRegionCounts / int(tableInfo.Count)
-				if invalidRegionCounts == 0 {
-					invalidRegionCounts = 1
-				}
-
-				err := infosync.UpdateTiFlashTableSyncProgress(context.Background(),
-					tableID,
-					float64(regionCount-invalidRegionCounts)/float64(regionCount))
-				if err != nil {
-					logutil.BgLogger().Error("updating TiFlash replica process failed",
-						zap.Error(err),
-						zap.Int64("tableID", tableInfo.ID),
-						zap.Bool("isPartition", tableInfo.IsPartition),
-						zap.Int("invalidRegionCounts", invalidRegionCounts),
-						zap.Int("regionCount", regionCount),
-					)
-					continue
-				}
-				logutil.BgLogger().Info("update TiFlash replica process", zap.Int64("tableID", tableInfo.ID), zap.Int("invalidRegionCounts", invalidRegionCounts), zap.Int("regionCount", regionCount)
-				readyInfo[tableID] = false
-
-			}
-		} else {
-			if !tableInfo.Ready {
-				readyInfo[tableID] = true
 			}
 		}
-	}
 
-	if len(readyInfo) == 0 {
-		return true, nil
-	}
-
-	if err := d.UpdateTableReplicaReadyInfo(ctx, readyInfo); err != nil {
-		logutil.BgLogger().Error("updating TiFlash replica status err", zap.Error(err))
+		logutil.BgLogger().Info("update TiFlash replica process", zap.Int64("tableID", tableInfo.ID), zap.Int("invalidRegionCounts", pendingRegionCount), zap.Int("regionCount", totalRegionCount))
 	}
 
 	return true, nil
 }
 
 func getInvalidTableTiflash(pollTiFlashContext *TiFlashManagementContext) (map[int64]int, error) {
-	tiflashStoreIDs := make([]int64, len(pollTiFlashContext.TiFlashStores))
-	invalidTableIDs := make(map[int64]int)
 
-	loopIndex := 0
-	for _, store := range pollTiFlashContext.TiFlashStores {
-		tiflashStoreIDs[loopIndex] = store.Store.ID
-		loopIndex++
-	}
-
-	sort.Slice(tiflashStoreIDs, func(i, j int) bool { return tiflashStoreIDs[i] < tiflashStoreIDs[j] })
-
-	isTiflashPeer := func(tiflashStoreIDs []int64, StoreID int64) bool {
-		left := 0
-		right := len(tiflashStoreIDs)
-		for left <= right {
-			mid := left + (right-left)/2
-			if StoreID == tiflashStoreIDs[mid] {
-				return true
-			}
-			if StoreID > tiflashStoreIDs[mid] {
-				left = mid + 1
-				continue
-			}
-			if StoreID < tiflashStoreIDs[mid] {
-				right = mid - 1
-				continue
-			}
-		}
-		logutil.BgLogger().Info("down|pending peer store id is not TiFlash store", zap.Int64s("tiflashStoreIDs", tiflashStoreIDs), zap.Int64("down|pending peer storeid", StoreID))
-		return false
-	}
-
-	uniqueSort := func(peerIDs []int64) []int64 {
-		length := len(peerIDs)
-		if length == 0 {
-			return peerIDs
-		}
-
-		sort.Slice(peerIDs, func(i, j int) bool { return peerIDs[i] < peerIDs[j] })
-
-		unique := make([]int64, 0)
-		temp := make(map[int64]bool, len(peerIDs))
-		for _, peerID := range peerIDs {
-			if temp[peerID] == false {
-				temp[peerID] = true
-				unique = append(unique, peerID)
-			}
-		}
-		return unique
+	isTiflashPeer := func(storeID int64) bool {
+		_, ok := pollTiFlashContext.TiFlashStores[storeID]
+		return ok
 	}
 
 	var invalidRegions helper.RegionsInfo
+	invalidTableIDs := make(map[int64]int)
 
-	if err := infosync.GetTiFlashPDInvalidRegionsInfo(context.Background(), &invalidRegions); err != nil {
+	if err := infosync.GetTiFlashPDPendingPeerInfo(context.Background(), &invalidRegions); err != nil {
 		return invalidTableIDs, errors.Trace(err)
 	}
 
-	// There are no down-peer/pending-peer
+	// There are no pending-peer
 	if invalidRegions.Count == 0 {
 		return invalidTableIDs, nil
 	}
 
 	invalidTableWithPeerIDs := make(map[int64][]int64)
 	for _, invaildRegion := range invalidRegions.Regions {
-		for _, downPeer := range invaildRegion.DownPeers {
-			if isTiflashPeer(tiflashStoreIDs, downPeer.Peer.StoreID) {
-				invalidTableID := helper.GetTiFlashTableIDFromEndKey(invaildRegion.EndKey)
-				invalidTableWithPeerIDs[invalidTableID] = append(invalidTableWithPeerIDs[invalidTableID], downPeer.Peer.ID)
-			}
-		}
-
 		for _, pendingPeer := range invaildRegion.PendingPeers {
-			if isTiflashPeer(tiflashStoreIDs, pendingPeer.StoreID) {
-				invalidTableID := helper.GetTiFlashTableIDFromEndKey(invaildRegion.EndKey)
+			if isTiflashPeer(pendingPeer.StoreID) {
+				invalidTableID := helper.GetTiFlashTableIDFromStartKey(invaildRegion.StartKey)
 				invalidTableWithPeerIDs[invalidTableID] = append(invalidTableWithPeerIDs[invalidTableID], pendingPeer.ID)
 			}
 		}
 	}
 
 	if len(invalidTableWithPeerIDs) != 0 {
-
 		for invalidTableID, invalidPeerIDs := range invalidTableWithPeerIDs {
-			invalidRegionCounts := len(invalidPeerIDs)
-			invalidPeerIDs = uniqueSort(invalidPeerIDs)
-			invalidTableIDs[invalidTableID] = invalidRegionCounts
-
-			logutil.BgLogger().Info("invalid regions", zap.Int64("invalidTableID", invalidTableID), zap.Int("invalidRegionCounts", invalidRegionCounts))
+			pendingPeerCount := len(invalidPeerIDs)
+			invalidTableIDs[invalidTableID] = pendingPeerCount
+			logutil.BgLogger().Info("invalid regions", zap.Int64("invalidTableID", invalidTableID), zap.Int("invalidRegionCounts", pendingPeerCount))
 		}
 	}
 
@@ -870,7 +817,8 @@ func (d *ddl) PollTiFlashRoutine() {
 			sctx, err := d.sessPool.get()
 			if err == nil {
 				if d.ownerManager.IsOwner() {
-					_, err := d.pollTiFlashReplicaStatus(sctx, pollTiflashContext)
+					logutil.BgLogger().Info("ready get peer info")
+					_, err := d.pollTiFlashPeerInfo(sctx, pollTiflashContext)
 					if err != nil {
 						switch err.(type) {
 						case *infosync.MockTiFlashError:
@@ -879,16 +827,8 @@ func (d *ddl) PollTiFlashRoutine() {
 							logutil.BgLogger().Warn("pollTiFlashReplicaStatus returns error", zap.Error(err))
 						}
 					}
-
-					syncElapsed := time.Since(LastTimeSyncTiFlashPeerInfo)
-					if syncElapsed > PollTiFlashPeerInfoInterval {
-						_, err := d.pollTiFlashPeerInfo(sctx, pollTiflashContext)
-						if err != nil {
-							logutil.BgLogger().Warn("pollTiFlashPeerInfo returns error", zap.Error(err))
-						}
-
-						LastTimeSyncTiFlashPeerInfo = time.Now()
-					}
+				} else {
+					logutil.BgLogger().Warn("is not owwner")
 				}
 				d.sessPool.put(sctx)
 			} else {
