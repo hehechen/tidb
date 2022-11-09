@@ -78,7 +78,8 @@ func (e *MPPGather) appendMPPDispatchReq(pf *plannercore.Fragment) error {
 			return errors.Trace(err)
 		}
 		logutil.BgLogger().Info("Dispatch mpp task", zap.Uint64("timestamp", mppTask.StartTs),
-			zap.Int64("ID", mppTask.ID), zap.String("address", mppTask.Meta.GetAddress()),
+			zap.Int64("ID", mppTask.ID), zap.Int64("QueryTs", mppTask.QueryTs),
+			zap.Uint64("ServerID", mppTask.ServerID), zap.String("address", mppTask.Meta.GetAddress()),
 			zap.String("plan", plannercore.ToString(pf.ExchangeSender)))
 		req := &kv.MPPDispatchRequest{
 			Data:      pbData,
@@ -88,6 +89,8 @@ func (e *MPPGather) appendMPPDispatchReq(pf *plannercore.Fragment) error {
 			Timeout:   10,
 			SchemaVar: e.is.SchemaMetaVersion(),
 			StartTs:   e.startTS,
+			QueryTs:   mppTask.QueryTs,
+			ServerID:  mppTask.ServerID,
 			State:     kv.MppTaskReady,
 		}
 		e.mppReqs = append(e.mppReqs, req)

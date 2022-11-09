@@ -30,10 +30,12 @@ type MPPTaskMeta interface {
 
 // MPPTask means the minimum execution unit of a mpp computation job.
 type MPPTask struct {
-	Meta    MPPTaskMeta // on which store this task will execute
-	ID      int64       // mppTaskID
-	StartTs uint64
-	TableID int64 // physical table id
+	Meta     MPPTaskMeta // on which store this task will execute
+	ID       int64       // mppTaskID
+	StartTs  uint64
+	QueryTs  int64 // timestamp of query execution, used for TiFlash miniTSO schedule
+	ServerID uint64
+	TableID  int64 // physical table id
 
 	PartitionTableIDs []int64
 }
@@ -41,8 +43,10 @@ type MPPTask struct {
 // ToPB generates the pb structure.
 func (t *MPPTask) ToPB() *mpp.TaskMeta {
 	meta := &mpp.TaskMeta{
-		StartTs: t.StartTs,
-		TaskId:  t.ID,
+		StartTs:  t.StartTs,
+		QueryTs:  t.QueryTs,
+		TaskId:   t.ID,
+		ServerId: t.ServerID,
 	}
 	if t.ID != -1 {
 		meta.Address = t.Meta.GetAddress()
@@ -73,7 +77,9 @@ type MPPDispatchRequest struct {
 	// SchemaVer is for any schema-ful storage (like tiflash) to validate schema correctness if necessary.
 	SchemaVar int64
 	StartTs   uint64
+	QueryTs   int64 // timestamp of query execution, used for TiFlash miniTSO schedule
 	ID        int64 // identify a single task
+	ServerID  uint64
 	State     MppTaskStates
 }
 

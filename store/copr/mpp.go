@@ -218,7 +218,8 @@ func (m *mppIterator) handleDispatchReq(ctx context.Context, bo *Backoffer, req 
 	}
 
 	// meta for current task.
-	taskMeta := &mpp.TaskMeta{StartTs: req.StartTs, TaskId: req.ID, Address: req.Meta.GetAddress()}
+	taskMeta := &mpp.TaskMeta{StartTs: req.StartTs, QueryTs: req.QueryTs, TaskId: req.ID, ServerId: req.ServerID,
+		Address: req.Meta.GetAddress()}
 
 	mppReq := &mpp.DispatchTaskRequest{
 		Meta:        taskMeta,
