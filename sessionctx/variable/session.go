@@ -1308,15 +1308,6 @@ func (s *SessionVars) InitStatementContext() *stmtctx.StatementContext {
 	return &s.cached.data[s.cached.curr]
 }
 
-var mppTaskID int64 = 0
-
-// AllocMPPTaskID allocates task id for mpp tasks.
-// TimeStamp 63 bit (physical timestamp: 48 bit, logic timestamp: 17 bit)
-// In TiFlash, MPP task manager will use this MPPTaskID and TiDB ServerID and query clock time to distinguish mpp queries.
-func (s *SessionVars) AllocMPPTaskID(startTS uint64) int64 {
-	return atomic.AddInt64(&mppTaskID, 1)
-}
-
 // IsMPPAllowed returns whether mpp execution is allowed.
 func (s *SessionVars) IsMPPAllowed() bool {
 	return s.allowMPPExecution

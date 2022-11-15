@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -80,31 +81,49 @@ type tasksAndFrags struct {
 }
 
 type mppTaskGenerator struct {
-	ctx     sessionctx.Context
-	startTS uint64
-	is      infoschema.InfoSchema
-	frags   []*Fragment
-	cache   map[int]tasksAndFrags
+	ctx          sessionctx.Context
+	startTS      uint64
+	localQueryID int64
+	queryTS      int64
+	is           infoschema.InfoSchema
+	frags        []*Fragment
+	cache        map[int]tasksAndFrags
 }
 
 // GenerateRootMPPTasks generate all mpp tasks and return root ones.
 func GenerateRootMPPTasks(ctx sessionctx.Context, startTs uint64, sender *PhysicalExchangeSender, is infoschema.InfoSchema) ([]*Fragment, error) {
 	g := &mppTaskGenerator{
-		ctx:     ctx,
-		startTS: startTs,
-		is:      is,
-		cache:   make(map[int]tasksAndFrags),
+		ctx:          ctx,
+		startTS:      startTs,
+		queryTS:      time.Now().UnixNano(),
+		localQueryID: allocMPPQueryID(),
+		is:           is,
+		cache:        make(map[int]tasksAndFrags),
 	}
 	return g.generateMPPTasks(sender)
+}
+
+var mppTaskID int64 = 0
+
+// allocMPPTaskID allocates task id for mpp tasks.
+// In TiFlash, MPP task manager will use this MPPTaskID and MPPQueryID to distinguish mpp queries.
+func allocMPPTaskID() int64 {
+	return atomic.AddInt64(&mppTaskID, 1)
+}
+
+// allocMPPTaskID allocates query id for mpp queries.
+func allocMPPQueryID() int64 {
+	return atomic.AddInt64(&mppTaskID, 1)
 }
 
 func (e *mppTaskGenerator) generateMPPTasks(s *PhysicalExchangeSender) ([]*Fragment, error) {
 	logutil.BgLogger().Info("Mpp will generate tasks", zap.String("plan", ToString(s)))
 	tidbTask := &kv.MPPTask{
-		StartTs:  e.startTS,
-		ServerID: domain.GetDomain(e.ctx).ServerID(),
-		QueryTs:  time.Now().UnixNano(),
-		ID:       -1,
+		StartTs:      e.startTS,
+		ServerID:     domain.GetDomain(e.ctx).ServerID(),
+		QueryTs:      e.queryTS,
+		LocalQueryID: e.localQueryID,
+		ID:           -1,
 	}
 	_, frags, err := e.generateMPPTasksForExchangeSender(s)
 	if err != nil {
@@ -135,12 +154,13 @@ func (e *mppTaskGenerator) constructMPPTasksByChildrenTasks(tasks []*kv.MPPTask)
 		_, ok := addressMap[addr]
 		if !ok {
 			mppTask := &kv.MPPTask{
-				Meta:     &mppAddr{addr: addr},
-				ID:       e.ctx.GetSessionVars().AllocMPPTaskID(e.startTS),
-				ServerID: domain.GetDomain(e.ctx).ServerID(),
-				QueryTs:  time.Now().UnixNano(),
-				StartTs:  e.startTS,
-				TableID:  -1,
+				Meta:         &mppAddr{addr: addr},
+				ID:           allocMPPTaskID(),
+				ServerID:     domain.GetDomain(e.ctx).ServerID(),
+				QueryTs:      e.queryTS,
+				LocalQueryID: e.localQueryID,
+				StartTs:      e.startTS,
+				TableID:      -1,
 			}
 			newTasks = append(newTasks, mppTask)
 			addressMap[addr] = struct{}{}
@@ -391,10 +411,11 @@ func (e *mppTaskGenerator) constructMPPTasksImpl(ctx context.Context, ts *Physic
 	tasks := make([]*kv.MPPTask, 0, len(metas))
 	for _, meta := range metas {
 		task := &kv.MPPTask{Meta: meta,
-			ID:                e.ctx.GetSessionVars().AllocMPPTaskID(e.startTS),
+			ID:                allocMPPTaskID(),
 			StartTs:           e.startTS,
 			ServerID:          domain.GetDomain(e.ctx).ServerID(),
-			QueryTs:           time.Now().UnixNano(),
+			QueryTs:           e.queryTS,
+			LocalQueryID:      e.localQueryID,
 			TableID:           ts.Table.ID,
 			PartitionTableIDs: allPartitionsIDs}
 		tasks = append(tasks, task)

@@ -82,16 +82,17 @@ func (e *MPPGather) appendMPPDispatchReq(pf *plannercore.Fragment) error {
 			zap.Uint64("ServerID", mppTask.ServerID), zap.String("address", mppTask.Meta.GetAddress()),
 			zap.String("plan", plannercore.ToString(pf.ExchangeSender)))
 		req := &kv.MPPDispatchRequest{
-			Data:      pbData,
-			Meta:      mppTask.Meta,
-			ID:        mppTask.ID,
-			IsRoot:    pf.IsRoot,
-			Timeout:   10,
-			SchemaVar: e.is.SchemaMetaVersion(),
-			StartTs:   e.startTS,
-			QueryTs:   mppTask.QueryTs,
-			ServerID:  mppTask.ServerID,
-			State:     kv.MppTaskReady,
+			Data:         pbData,
+			Meta:         mppTask.Meta,
+			ID:           mppTask.ID,
+			IsRoot:       pf.IsRoot,
+			Timeout:      10,
+			SchemaVar:    e.is.SchemaMetaVersion(),
+			StartTs:      e.startTS,
+			QueryTs:      mppTask.QueryTs,
+			LocalQueryId: mppTask.LocalQueryID,
+			ServerID:     mppTask.ServerID,
+			State:        kv.MppTaskReady,
 		}
 		e.mppReqs = append(e.mppReqs, req)
 	}
@@ -116,6 +117,7 @@ func (e *MPPGather) Open(ctx context.Context) (err error) {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	rootDestinationTask := frags[0].ExchangeSender.TargetTasks[0]
 	for _, frag := range frags {
 		err = e.appendMPPDispatchReq(frag)
 		if err != nil {
@@ -127,7 +129,7 @@ func (e *MPPGather) Open(ctx context.Context) (err error) {
 			failpoint.Return(errors.Errorf("The number of tasks is not right, expect %d tasks but actually there are %d tasks", val.(int), len(e.mppReqs)))
 		}
 	})
-	e.respIter, err = distsql.DispatchMPPTasks(ctx, e.ctx, e.mppReqs, e.retFieldTypes, planIDs, e.id, e.startTS)
+	e.respIter, err = distsql.DispatchMPPTasks(ctx, e.ctx, e.mppReqs, e.retFieldTypes, planIDs, e.id, e.startTS, rootDestinationTask)
 	if err != nil {
 		return errors.Trace(err)
 	}
