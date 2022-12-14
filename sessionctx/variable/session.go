@@ -1308,20 +1308,6 @@ func (s *SessionVars) InitStatementContext() *stmtctx.StatementContext {
 	return &s.cached.data[s.cached.curr]
 }
 
-// AllocMPPTaskID allocates task id for mpp tasks. It will reset the task id if the query's
-// startTs is different.
-func (s *SessionVars) AllocMPPTaskID(startTS uint64) int64 {
-	s.mppTaskIDAllocator.mu.Lock()
-	defer s.mppTaskIDAllocator.mu.Unlock()
-	if s.mppTaskIDAllocator.lastTS == startTS {
-		s.mppTaskIDAllocator.taskID++
-		return s.mppTaskIDAllocator.taskID
-	}
-	s.mppTaskIDAllocator.lastTS = startTS
-	s.mppTaskIDAllocator.taskID = 1
-	return 1
-}
-
 // IsMPPAllowed returns whether mpp execution is allowed.
 func (s *SessionVars) IsMPPAllowed() bool {
 	return s.allowMPPExecution
